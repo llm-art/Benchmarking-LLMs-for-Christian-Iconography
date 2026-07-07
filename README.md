@@ -1,6 +1,8 @@
 # Can AI Recognize the Saints?
 Benchmarking Vision-Language and Multimodal Models for Christian Iconography Classification
 
+This repository benchmarks three families of vision models — supervised CNNs, contrastive vision-language models (CLIP, SigLIP), and generative multimodal LLMs (GPT, Gemini) — on classifying Christian saints across three Iconclass-annotated art datasets. It accompanies a study structured around four questions: how do the architectures compare (RQ1); how does accuracy change when prompts are enriched with iconographic descriptions or few-shot exemplars (RQ2); do successive LLM generations improve systematically (RQ3); and what do the residual failures of the strongest models reveal about the limits of the task (RQ4)?
+
 ## Table of Contents
 
 - [Leaderboard](#leaderboard)
@@ -8,6 +10,7 @@ Benchmarking Vision-Language and Multimodal Models for Christian Iconography Cla
   - [ArtDL](#artdl)
   - [ICONCLASS](#iconclass)
   - [Wikidata](#wikidata)
+  - [Error Analysis](#error-analysis)
 - [Repository Overview](#repository-overview)
 - [Datasets](#datasets)
 - [Getting Started](#getting-started)
@@ -120,15 +123,25 @@ Performance is evaluated through **top-1 accuracy**. Three test configurations a
 | gpt-5.2-2025-12-11 | 70.70% | 72.89% | 69.97% | 71.19 +/- 1.24 |
 | *Baseline (ResNet-50 trained)* | 43.97% | | | |
 
+### Error Analysis
+
+To probe what the strongest models still get wrong, ICONCLASS (Test 1, label-only) is analyzed layer by layer, comparing the top model (Gemini-3-Flash), a mid-tier model (GPT-5.2), and the two fine-tuned ResNet-50 baselines:
+
+1. **Per-class confusion** — the ResNet-50 baselines scatter errors diffusely across the matrix (undertrained on ~600-700 images); Gemini-3-Flash (93.3% accuracy, 58 errors) and GPT-5.2 (64.0%, 311 errors) concentrate their far fewer errors on a small set of interpretable off-diagonal cells.
+2. **Confusable pairs** — for each ordered class pair (k → l), the confusion rate CR(k→l) = N(true k, pred l) / N(true k) is computed. Both models fail on the same boundaries — Magdalene↔Catherine, Antony Abbot→Jerome, Paul↔Peter, Peter→John — despite a five-fold gap in error count.
+3. **Image-property taxonomy** — every misclassified image is assigned exactly one cause by a most-proximal-cause precedence rule: information loss (greyscale or colourfulness below 15), low figure saliency (principal figure below 5% of canvas area), or iconographic overlap (predicted class forms a confusable pair with the true class, CR≥1%). Both models land in almost the same proportions (~50% low saliency, ~30% information loss, ~20% iconographic overlap) despite the accuracy gap.
+
+The convergence of failure modes across two architecturally distinct models indicates the residual errors are governed by intrinsic iconographic ambiguity rather than model capacity. Scripts: `dataset/shift_analysis/perclass_layer.py`, `confusable_pairs.py`, `error_taxonomy.py`; full write-up in `dataset/reports/error_taxonomy.md`.
+
 ## Repository Overview
 
 This repository presents a comprehensive benchmarking framework for evaluating three families of models — supervised convolutional networks, contrastive vision-language models (VLMs), and generative multimodal large language models (LLMs) — on image classification tasks in the cultural heritage domain, using Christian iconography as a case study.
 
 ### Model Categories
 
-- **Generative Multimodal LLMs** — Legacy (GPT-4o, GPT-4o-mini, Gemini 2.5 Flash/Pro) and state-of-the-art (GPT-5-mini, GPT-5.2, Gemini 3-Flash, Gemini 3.1-Flash-Lite, Gemini 3.1-Pro)
+- **Generative Multimodal LLMs** — Legacy (GPT-4o, GPT-4o-mini, Gemini 2.5 Flash-Lite/Flash/Pro) and state-of-the-art (GPT-5-mini, GPT-5.2, Gemini 3-Flash, Gemini 3.1-Flash-Lite, Gemini 3.1-Pro)
 - **Contrastive Vision-Language Models** — CLIP (ViT-B/32, ViT-B/16, ViT-L/14) and SigLIP (Base-Patch16-512, Large-Patch16-384, SO400M-Patch14-384)
-- **Supervised Baselines** — ResNet-50 fine-tuned per dataset
+- **Supervised Baselines** — ResNet-50: the originally published model for ArtDL, fine-tuned from scratch on an 80/20 train/test split for ICONCLASS and Wikidata
 
 ## Datasets
 
@@ -136,13 +149,15 @@ This repository presents a comprehensive benchmarking framework for evaluating t
 2. **[ICONCLASS AI test set](https://iconclass.org/testset/)** — 863 images, 10 saint classes (filtered from ~87.5K)
 3. **[Wikidata](https://www.wikidata.org/)** — 717 images, 10 saint classes (curated via SPARQL with Iconclass annotations)
 
+Class overlap across the three sets is incomplete: John the Baptist, Paul, Jerome, Francis, Peter, and Mary Magdalene are shared by all three; Catherine and Antony Abbot are shared only by ICONCLASS and Wikidata; the remaining classes (Dominic, Mary, Sebastian, Antony of Padua, Matthew, Luke, Joseph, John) are dataset-specific.
+
 ## Getting Started
 
 ### Prerequisites and Installation
 
 ```bash
-git clone https://github.com/llm-art/LLM-test.git
-cd LLM-test
+git clone https://github.com/llm-art/ai-recognize-saints.git
+cd ai-recognize-saints
 pip install -r requirements.txt
 ```
 
@@ -180,6 +195,8 @@ python script/execute_gemini.py --models gemini-3-flash-preview --datasets ArtDL
 # Generate evaluation metrics
 python script/evaluate.py --models gpt-5.2-2025-12-11 gemini-3-flash-preview gemini-3.1-pro-preview --datasets ArtDL ICONCLASS wikidata --folders test_1 test_2 test_3
 ```
+
+To reproduce the paper's reported accuracy, pass `--temperature 0.1` for models where manual control is supported (legacy Gemini and GPT snapshots). State-of-the-art snapshots differ by provider default: Gemini 3.x recommends `--temperature 1`, while GPT-5.x deprecates manual temperature control owing to its reasoning behaviour.
 
 ### Output Structure
 
@@ -304,16 +321,45 @@ python script/few-shot.py --models clip-vit-base-patch32 --datasets ArtDL --fold
 ```
 
 #### `generation_compare.py` - Cross-Generation Accuracy Comparison
-**Purpose:** Visualizes generational accuracy shifts by model family across datasets (produces Fig. 2 in the paper).
+**Purpose:** Visualizes generational accuracy shifts by model family across datasets (produces Fig. 1 in the paper).
 
 #### `analyze_prediction_shifts.py` - Cross-Generation Misclassification Analysis
-**Purpose:** Generates heatmaps of cross-generation misclassifications between legacy and state-of-the-art models (produces Fig. 3 in the paper).
+**Purpose:** Generates heatmaps of cross-generation misclassifications between legacy and state-of-the-art models.
 
 #### `consistency_analysis.py` - Cross-Dataset Consistency
 **Purpose:** Evaluates prediction stability across the 45 matched cross-dataset image pairs identified via perceptual hashing.
 
 #### `compute_overlap.py` - Dataset Overlap Detection
 **Purpose:** Identifies duplicate images across datasets using perceptual hashing (Hamming distance threshold of 8).
+
+### Error-Analysis Scripts (`dataset/shift_analysis/`)
+
+These scripts implement the error-analysis protocol described in the paper: a structured comparison of the ICONCLASS Test 1 predictions from Gemini-3-Flash, GPT-5.2, and the two fine-tuned ResNet-50 baselines.
+
+#### `perclass_layer.py` - Per-Class Confusion and Error Entropy
+**Purpose:** Builds the side-by-side confusion-matrix figure (Fig. 2 in the paper) and a normalized off-diagonal entropy table contrasting the diffuse baseline errors with the concentrated frontier-model errors.
+
+```bash
+python dataset/shift_analysis/perclass_layer.py
+```
+
+#### `confusable_pairs.py` - Confusable-Pair Detection
+**Purpose:** Computes the directional confusion rate CR(k→l) = N(true k, pred l)/N(true k) per ordered class pair and flags pairs shared by both frontier models (CR≥1% in each).
+
+```bash
+python dataset/shift_analysis/confusable_pairs.py
+```
+
+#### `error_taxonomy.py` - Image-Property Taxonomy of Misclassifications
+**Purpose:** Assigns each misclassified image to exactly one category — information loss, low figure saliency, or iconographic overlap — via a fixed precedence rule, producing Fig. 3 in the paper.
+
+```bash
+python dataset/shift_analysis/error_taxonomy.py
+# skip the Faster R-CNN person detector (Cat. 2 will be unknown):
+python dataset/shift_analysis/error_taxonomy.py --skip-detector
+```
+
+Full write-up of the protocol, thresholds, and findings: `dataset/reports/error_taxonomy.md`.
 
 ### Baseline Scripts
 
@@ -331,7 +377,8 @@ python baseline/resnet50_baseline.py --dataset ArtDL --train_split 0.8 --epochs 
 - **Data preprocessing notebooks** — Jupyter notebooks for dataset preparation and analysis
 - **`dataset/consistency/`** — Cross-dataset consistency evaluation results and analysis
 - **`dataset/consistency_trends/`** — Temporal consistency trends across model generations
-- **`dataset/shift_analysis/`** — Cross-generation misclassification shift data
+- **`dataset/shift_analysis/`** — Cross-generation misclassification shift data, plus the ICONCLASS error-analysis pipeline (per-class confusion, confusable pairs, image-property taxonomy) behind Fig. 2–3 and RQ4
+- **`dataset/reports/error_taxonomy.md`** — Full write-up of the error-analysis protocol, category thresholds, and findings
 
 ## Prompt Engineering
 
